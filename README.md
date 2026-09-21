@@ -1,2 +1,2 @@
-# -bounce-lines
-https://yolaaandaw-dotcom.github.io/-bounce-lines/
+# bounce-lines
+https://yolaaandaw-dotcom.github.io/bounce-lines/
