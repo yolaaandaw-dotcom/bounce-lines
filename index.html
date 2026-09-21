@@ -29,6 +29,7 @@
   button.primary:hover { background: transparent; color: var(--ink); }
   .presets { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--muted); }
   .main-controls .presets button { font-size: 0.85rem; padding: 6px 10px; }
+  .main-controls .switch.mem { font-size: 1rem; color: var(--ink); font-weight: 500; }
   .how { margin: 0; font-size: 0.85rem; color: var(--muted); }
   .more summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); width: fit-content; }
   .more-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-top: 10px; }
@@ -67,10 +68,11 @@
     </span>
     <button type="button" id="runBtn" class="primary">Run</button>
     <button type="button" id="resetBtn">Reset</button>
+    <label class="switch mem"><input type="checkbox" id="memory" role="switch" checked> Memory</label>
     <span class="small count">Lines<b id="count">0</b></span>
     <span class="small" id="status" aria-live="polite"></span>
   </div>
-  <p class="how">1. Choose an angle &nbsp; 2. Press Run &nbsp; 3. Press Reset to start again. You can also move the angle while it draws.</p>
+  <p class="how">1. Choose an angle &nbsp; 2. Press Run &nbsp; 3. Press Reset to start again. You can also move the angle while it draws. Turn Memory off and the pen forgets its own lines: it only bounces off the edges and never stops.</p>
 
   <!-- Everything else, tucked away -->
   <details class="more">
@@ -105,7 +107,9 @@ function makeEngine(W, H, mode, params, rand = Math.random) {
   // First line hit by the ray p + t*d (ignoring segment `skip`).
   function ray(p, d, skip) {
     let best = Infinity, idx = -1;
-    for (let i = 0; i < segs.length; i++) {
+    // Memory off: the pen forgets its own lines and only sees the 4 canvas edges
+    const count = params.memory === false ? 4 : segs.length;
+    for (let i = 0; i < count; i++) {
       if (i === skip) continue;
       const s = segs[i], ex = s.b.x - s.a.x, ey = s.b.y - s.a.y;
       const den = d.x * ey - d.y * ex;
@@ -144,7 +148,7 @@ function makeEngine(W, H, mode, params, rand = Math.random) {
 
   function retirePen() {
     if (penLines < 3) deadPens++; else deadPens = 0;   // many dead-on-arrival pens = full
-    if (deadPens > 60 || lines.length > 8000) done = true;
+    if (deadPens > 60) done = true;
     pen = null;
   }
 
@@ -159,7 +163,8 @@ function makeEngine(W, H, mode, params, rand = Math.random) {
 
     // Trapped: several tiny moves in a row, or this pen has drawn enough
     tiny = hit.t < 1.5 ? tiny + 1 : 0;
-    if (tiny > 3 || penLines > MAX_PEN_LINES) { retirePen(); return; }
+    // With memory off the pen is never retired: it just keeps going
+    if (params.memory !== false && (tiny > 3 || penLines > MAX_PEN_LINES)) { retirePen(); return; }
 
     // Leave the wall at params.angle, back toward the side we came from,
     // continuing in the same direction along the wall.
@@ -178,7 +183,7 @@ function makeEngine(W, H, mode, params, rand = Math.random) {
   return {
     lines,
     isDone: () => done,
-    step() { if (!done) stepFn(); return !done; },
+    step() { if (!done) stepFn(); if (lines.length > 8000) done = true; return !done; },
   };
 }
 
@@ -209,6 +214,7 @@ function reset() {
   world = { w: stage.clientWidth, h: stage.clientHeight };
   params = {};
   RULES[mode].apply(params, Number(paramEl.value));
+  params.memory = $("memory").checked;
   engine = makeEngine(world.w, world.h, mode, params);
   refresh();
 }
@@ -248,7 +254,9 @@ function draw() {
 
 function refresh() {
   $("count").textContent = engine.lines.length;
-  $("status").textContent = engine.isDone() ? "Full. Press Run to draw a new one." : "";
+  $("status").textContent =
+      engine.isDone() ? (params.memory ? "Full. Press Run to draw a new one." : "Stopped after 8,000 lines. Without memory it would never end.")
+    : params.memory ? "" : "No memory: the pen only sees the edges.";
   draw();
 }
 
@@ -280,6 +288,7 @@ paramEl.addEventListener("input", () => {
 
 // Canvas size: only the display size changes; the drawing scales with it
 $("size").addEventListener("input", e => stage.style.setProperty("--size", e.target.value));
+$("memory").addEventListener("change", e => { params.memory = e.target.checked; refresh(); });
 $("weight").addEventListener("input", e => { $("weightValue").textContent = e.target.value; draw(); });
 $("frame").addEventListener("change", draw);
 
