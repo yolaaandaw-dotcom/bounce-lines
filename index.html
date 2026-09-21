@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bounce</title>
+<style>
+  :root {
+    --paper: #F6F6F2; --ink: #000; --muted: #6E6E6A; --rule: #CFCFC8;
+    --font: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); font-family: var(--font); }
+  body { display: grid; grid-template-rows: auto 1fr auto; gap: 14px; padding: 22px 26px; }
+
+
+  .rule-text { margin: 0; max-width: 62ch; font-size: clamp(1.1rem, 1.8vw, 1.45rem); font-weight: 500; line-height: 1.3; letter-spacing: -0.01em; }
+
+  main { display: grid; place-items: center; min-height: 0; }
+  .stage { --size: 56; position: relative; width: min(calc(var(--size) * 1vh), calc(var(--size) * 1vw)); aspect-ratio: 1; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  footer { display: flex; flex-direction: column; gap: 10px; }
+  .main-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .main-controls .param { font-size: 1.1rem; }
+  .main-controls .param input { width: 280px; }
+  .main-controls button { font-size: 1rem; padding: 10px 22px; }
+  button.primary { background: var(--ink); color: var(--paper); }
+  button.primary:hover { background: transparent; color: var(--ink); }
+  .presets { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--muted); }
+  .main-controls .presets button { font-size: 0.85rem; padding: 6px 10px; }
+  .how { margin: 0; font-size: 0.85rem; color: var(--muted); }
+  .more summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); width: fit-content; }
+  .more-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-top: 10px; }
+  .param { display: flex; align-items: center; gap: 10px; font-size: 0.95rem; font-weight: 500; }
+  .param input { accent-color: #000; width: 220px; }
+  .param output { min-width: 3.5ch; font-variant-numeric: tabular-nums; }
+  .small { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--muted); }
+  .small input { accent-color: #000; width: 90px; }
+  .switch { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--muted); cursor: pointer; }
+  .switch input { appearance: none; width: 30px; height: 16px; border: 1px solid #000; border-radius: 8px; position: relative; margin: 0; cursor: pointer; }
+  .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: #000; }
+  .switch input:checked { background: #000; }
+  .switch input:checked::after { left: 16px; background: var(--paper); }
+  .switch input:focus-visible { outline: 2px solid #000; outline-offset: 2px; }
+  .count b { font-weight: 400; color: var(--ink); font-variant-numeric: tabular-nums; margin-left: 4px; }
+  button { font: 500 0.9rem var(--font); color: var(--ink); background: transparent; border: 1px solid var(--ink); padding: 8px 14px; cursor: pointer; }
+  button:hover { background: var(--ink); color: var(--paper); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+</style>
+</head>
+<body>
+
+<p class="rule-text" id="ruleText"></p>
+
+<main><div class="stage" id="stage"><canvas id="canvas" aria-label="Drawing canvas"></canvas></div></main>
+
+<footer>
+  <!-- Main controls: the three things people actually need -->
+  <div class="main-controls">
+    <label class="param"><span id="paramName"></span>
+      <input type="range" id="param"><output id="paramValue"></output>
+    </label>
+    <span class="presets">Try
+      <button type="button" data-angle="10">10°</button>
+      <button type="button" data-angle="87">87°</button>
+    </span>
+    <button type="button" id="runBtn" class="primary">Run</button>
+    <button type="button" id="resetBtn">Reset</button>
+    <span class="small count">Lines<b id="count">0</b></span>
+    <span class="small" id="status" aria-live="polite"></span>
+  </div>
+  <p class="how">1. Choose an angle &nbsp; 2. Press Run &nbsp; 3. Press Reset to start again. You can also move the angle while it draws.</p>
+
+  <!-- Everything else, tucked away -->
+  <details class="more">
+    <summary>More options</summary>
+    <div class="more-controls">
+      <label class="small">Speed <input type="range" id="speed" min="1" max="300" value="300"></label>
+      <label class="small">Canvas size <input type="range" id="size" min="20" max="92" value="56"></label>
+      <label class="small">Line weight <input type="range" id="weight" min="0.25" max="4" step="0.25" value="0.5"><output id="weightValue">0.5</output></label>
+      <label class="switch"><input type="checkbox" id="frame" role="switch"> Border</label>
+      <button type="button" id="exportBtn">Export PNG</button>
+    </div>
+  </details>
+</footer>
+
+<script>
+/* ======================================================================
+   ENGINE
+   makeEngine(W, H, mode, params) → { lines, step(), isDone() }
+   params is read on every step, so moving a slider mid-drawing changes
+   every line drawn after that moment.
+   Shared constraint for both rules: lines never cross.
+   ====================================================================== */
+function makeEngine(W, H, mode, params, rand = Math.random) {
+  const border = [
+    { a:{x:0,y:0}, b:{x:W,y:0} }, { a:{x:W,y:0}, b:{x:W,y:H} },
+    { a:{x:W,y:H}, b:{x:0,y:H} }, { a:{x:0,y:H}, b:{x:0,y:0} },
+  ];
+  const segs = border.slice();      // everything a line can hit
+  const lines = [];                 // only the drawn lines
+  let done = false;
+
+  // First line hit by the ray p + t*d (ignoring segment `skip`).
+  function ray(p, d, skip) {
+    let best = Infinity, idx = -1;
+    for (let i = 0; i < segs.length; i++) {
+      if (i === skip) continue;
+      const s = segs[i], ex = s.b.x - s.a.x, ey = s.b.y - s.a.y;
+      const den = d.x * ey - d.y * ex;
+      if (Math.abs(den) < 1e-12) continue;            // parallel
+      const ax = s.a.x - p.x, ay = s.a.y - p.y;
+      const t = (ax * ey - ay * ex) / den;             // distance along ray
+      const u = (ax * d.y - ay * d.x) / den;           // position on segment
+      if (t > 1e-7 && u >= -1e-9 && u <= 1 + 1e-9 && t < best) { best = t; idx = i; }
+    }
+    return { t: best, i: idx };
+  }
+
+  function distToSeg(p, s) {
+    const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y, L2 = dx*dx + dy*dy || 1;
+    const t = Math.max(0, Math.min(1, ((p.x-s.a.x)*dx + (p.y-s.a.y)*dy) / L2));
+    return Math.hypot(p.x - s.a.x - t*dx, p.y - s.a.y - t*dy);
+  }
+
+  function add(a, b) { const l = { a, b }; segs.push(l); lines.push(l); }
+
+  /* ------------------------------------------------------------------
+     A · BOUNCE
+     A pen travels straight until it hits a line, then leaves that line
+     at a fixed angle (params.angle) and keeps going. Its own trail
+     becomes new walls, so it slowly traps itself. A trapped pen is
+     replaced by a new one at a random spot.
+  ------------------------------------------------------------------ */
+  let pen = null, penLines = 0, tiny = 0, deadPens = 0;
+  const MAX_PEN_LINES = 400;
+
+  function newPen() {
+    const a = rand() * Math.PI * 2;
+    pen = { p: { x: W*rand(), y: H*rand() }, d: { x: Math.cos(a), y: Math.sin(a) }, wall: -1 };
+    penLines = 0; tiny = 0;
+  }
+
+  function retirePen() {
+    if (penLines < 3) deadPens++; else deadPens = 0;   // many dead-on-arrival pens = full
+    if (deadPens > 60 || lines.length > 8000) done = true;
+    pen = null;
+  }
+
+  function stepBounce() {
+    if (!pen) newPen();
+    const hit = ray(pen.p, pen.d, pen.wall);
+    if (hit.i < 0) { retirePen(); return; }
+
+    const q = { x: pen.p.x + pen.d.x * hit.t, y: pen.p.y + pen.d.y * hit.t };
+    add(pen.p, q);
+    penLines++;
+
+    // Trapped: several tiny moves in a row, or this pen has drawn enough
+    tiny = hit.t < 1.5 ? tiny + 1 : 0;
+    if (tiny > 3 || penLines > MAX_PEN_LINES) { retirePen(); return; }
+
+    // Leave the wall at params.angle, back toward the side we came from,
+    // continuing in the same direction along the wall.
+    const s = segs[hit.i], L = Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y);
+    const t = { x: (s.b.x - s.a.x) / L, y: (s.b.y - s.a.y) / L };
+    let n = { x: -t.y, y: t.x };
+    if (pen.d.x * n.x + pen.d.y * n.y > 0) n = { x: -n.x, y: -n.y };
+    const along = Math.sign(pen.d.x * t.x + pen.d.y * t.y) || 1;
+    const r = params.angle * Math.PI / 180;
+    pen.d = { x: t.x*along*Math.cos(r) + n.x*Math.sin(r), y: t.y*along*Math.cos(r) + n.y*Math.sin(r) };
+    pen.p = q;
+    pen.wall = hit.i;
+  }
+
+  const stepFn = stepBounce;
+  return {
+    lines,
+    isDone: () => done,
+    step() { if (!done) stepFn(); return !done; },
+  };
+}
+
+
+/* ======================================================================
+   THE RULE AND ITS ONE PARAMETER
+   ====================================================================== */
+const RULES = {
+  bounce: {
+    text: "A pen moves in a straight line. When it hits any line, including its own trail, it leaves at a fixed angle and keeps going. When it traps itself, a new pen starts.",
+    name: "Bounce angle", min: 5, max: 89, value: 10,
+    show: v => v + "°",
+    apply: (p, v) => { p.angle = v; },
+  },
+};
+
+/* ======================================================================
+   APP
+   ====================================================================== */
+const $ = id => document.getElementById(id);
+const stage = $("stage"), canvas = $("canvas"), ctx = canvas.getContext("2d");
+const paramEl = $("param");
+
+let mode = "bounce", params = {}, engine, world, running = false, owed = 0, lastTime = 0;
+
+function reset() {
+  setRunning(false);
+  world = { w: stage.clientWidth, h: stage.clientHeight };
+  params = {};
+  RULES[mode].apply(params, Number(paramEl.value));
+  engine = makeEngine(world.w, world.h, mode, params);
+  refresh();
+}
+
+function selectMode(m) {
+  mode = m;
+  const r = RULES[m];
+  $("ruleText").textContent = r.text;
+  $("paramName").textContent = r.name;
+  paramEl.min = r.min; paramEl.max = r.max; paramEl.value = r.value;
+  $("paramValue").textContent = r.show(r.value);
+  reset();
+}
+
+function render(c, w, h) {
+  c.fillStyle = "#F6F6F2";
+  c.fillRect(0, 0, w, h);
+  const sx = w / world.w, sy = h / world.h;
+  const weight = Number($("weight").value);
+  c.strokeStyle = "#000";
+  c.lineWidth = weight;
+  c.lineJoin = "round";
+  c.beginPath();
+  for (const l of engine.lines) { c.moveTo(l.a.x * sx, l.a.y * sy); c.lineTo(l.b.x * sx, l.b.y * sy); }
+  c.stroke();
+
+  // Optional border, same weight as the lines, drawn fully inside the image
+  if ($("frame").checked) c.strokeRect(weight / 2, weight / 2, w - weight, h - weight);
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1, w = stage.clientWidth, h = stage.clientHeight;
+  canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  render(ctx, w, h);
+}
+
+function refresh() {
+  $("count").textContent = engine.lines.length;
+  $("status").textContent = engine.isDone() ? "Full. Press Run to draw a new one." : "";
+  draw();
+}
+
+function setRunning(on) {
+  running = on && !(engine && engine.isDone());
+  $("runBtn").textContent = running ? "Pause" : "Run";
+  if (running) { lastTime = performance.now(); owed = 0; requestAnimationFrame(tick); }
+}
+
+function tick(now) {
+  if (!running) return;
+  owed = Math.min(owed + (now - lastTime) / 1000 * Number($("speed").value), 50);
+  lastTime = now;
+  const t0 = performance.now();
+  while (owed >= 1 && performance.now() - t0 < 25) {     // keep the page responsive
+    owed--;
+    if (!engine.step()) { setRunning(false); break; }
+  }
+  refresh();
+  if (running) requestAnimationFrame(tick);
+}
+
+/* ---------- Controls ---------- */
+paramEl.addEventListener("input", () => {
+  const v = Number(paramEl.value);
+  $("paramValue").textContent = RULES[mode].show(v);
+  RULES[mode].apply(params, v);          // live: affects the next line
+});
+
+// Canvas size: only the display size changes; the drawing scales with it
+$("size").addEventListener("input", e => stage.style.setProperty("--size", e.target.value));
+$("weight").addEventListener("input", e => { $("weightValue").textContent = e.target.value; draw(); });
+$("frame").addEventListener("change", draw);
+
+function onClick(node, fn) { node.addEventListener("click", e => { fn(); e.currentTarget.blur(); }); }
+onClick($("runBtn"), () => {
+  if (engine.isDone()) reset();          // finished drawing: Run starts a fresh one
+  setRunning(!running);
+});
+onClick($("resetBtn"), reset);
+// Preset angles: set the slider, then start a fresh drawing
+document.querySelectorAll(".presets button").forEach(b => onClick(b, () => {
+  paramEl.value = b.dataset.angle;
+  paramEl.dispatchEvent(new Event("input"));
+  reset();
+  setRunning(true);
+}));
+onClick($("exportBtn"), () => {
+  const w = stage.clientWidth, h = stage.clientHeight, out = document.createElement("canvas");
+  out.width = w * 2; out.height = h * 2;
+  const oc = out.getContext("2d"); oc.scale(2, 2); render(oc, w, h);
+  const a = document.createElement("a");
+  a.download = `lines-${mode}-${paramEl.value}.png`; a.href = out.toDataURL("image/png"); a.click();
+});
+
+new ResizeObserver(() => { if (engine) draw(); }).observe(stage);
+selectMode("bounce");
+</script>
+</body>
+</html>
